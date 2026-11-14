@@ -482,12 +482,23 @@ published when anything is in doubt.
     hour and drafts nothing; an admin notice tells users who can manage
     options, and the next admin page load runs the schema install again
     and verifies the columns by reading them back.
-67. When `llm-json-php` cannot be loaded, generation is off, drafts stay
-    queued until the queue age limit, and an admin notice says why.
+67. When `llm-json-php` cannot be loaded and no caller is supplied
+    through `cdreplies_model_caller` (case 70), generation is off, drafts
+    stay queued until the queue age limit, and an admin notice says why.
 68. When no provider key or model is configured, the same as case 67.
 69. Clock and timezone: every "day" uses the site timezone; every stored
     time is UTC. A timezone change takes effect at the next day boundary
     and never resets the counter for the current day early.
+70. **Own caller.** The filter `cdreplies_model_caller` receives `null`
+    and a request array (`purpose`, `system`, `user`, `schema`,
+    `max_output_tokens`, `deadline`). A non-null return replaces the
+    `llm-json-php` call: an array is the decoded answer, which then goes
+    through the same schema check and validation (cases 30 and 31); a
+    `WP_Error` with code `cdreplies_retryable`, `cdreplies_account` or any
+    other code maps to a transient error, a provider hold, or a permanent
+    failure (case 34). The kill switch, daily cap, rate limits and
+    spend-meter check all apply before the filter is called, and each
+    call through it counts toward the cap.
 
 ## 5. Public interface
 
@@ -559,6 +570,7 @@ authentication method.
 | `cdreplies_capability` | `moderate_comments` | Review capability (plus `edit_post`) |
 | `cdreplies_settings_capability` | `manage_options` | Settings and status |
 | `cdreplies_client` | `null` | Supply a ready `llm-json-php` client |
+| `cdreplies_model_caller` | `null` | Replace the model call with the site's own caller (case 70) |
 
 ### 5.5 REST API
 
@@ -737,9 +749,11 @@ message and the old value kept.
 ## 10. Compatibility
 
 - PHP 8.1, 8.2, 8.3. WordPress 6.4 or later.
-- Runtime dependency: `indianopinion/llm-json-php` only (a `vcs`
-  repository in `composer.json`, with a bundled copy for installs without
-  Composer). Optional: `gen-queue`, `spend-meter`, `prompt-library`.
+- Runtime dependency: `indianopinion/llm-json-php` only, as a `vcs`
+  repository in `composer.json`, never bundled. A site without Composer
+  supplies its own caller through `cdreplies_model_caller` (case 70) and
+  runs without the library. Optional: `gen-queue`, `spend-meter`,
+  `prompt-library`.
 - Classic and block themes; the plugin does not touch the front end.
 - Page caches and CDNs: drafts never reach a public page. Published replies
   go through core's comment path, so cache-purge plugins that listen to
@@ -920,6 +934,11 @@ that returns scripted answers. Tn tests case n.
 68. T68: with no key or no model, the same.
 69. T69: the cap day follows the site timezone across a UTC midnight, and
     a timezone change does not reset today's counter.
+70. T70: with the library absent and a caller filter returning a scripted
+    array, a draft becomes `ready` after validation; a caller returning a
+    link is rejected as in T31; a `WP_Error` with `cdreplies_account`
+    starts a hold; with the switch on or the cap reached the filter is
+    never called.
 
 ## 13. Open questions
 
@@ -940,8 +959,9 @@ To be answered by the builder in `docs/ARCHITECTURE.md`.
    kept apart?
 6. Should the editor note on regeneration (case 43) be stored after the
    draft is published, or cleared at publish?
-7. Bundled `llm-json-php` for installs without Composer: copied into the
-   release zip, or loaded only when Composer is used?
+7. Without Composer, should the plugin ship an example
+   `cdreplies_model_caller` that uses the WordPress HTTP API against an
+   OpenAI-compatible endpoint, or leave the caller entirely to the site?
 8. Default limits (cap 30 calls, thread 2 per day, post 6 per hour, author
    3 per day): confirm or replace with values the builder can justify.
 
