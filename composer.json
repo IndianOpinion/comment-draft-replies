@@ -1,0 +1,62 @@
+{
+    "name": "indianopinion/comment-draft-replies",
+    "description": "Drafts a reply to each eligible reader comment with a language model and holds it for a moderator, who publishes it with one click. Nothing publishes on its own.",
+    "type": "wordpress-plugin",
+    "license": "MIT",
+    "keywords": [
+        "wordpress",
+        "comments",
+        "moderation",
+        "llm",
+        "drafts"
+    ],
+    "homepage": "https://github.com/IndianOpinion/comment-draft-replies",
+    "support": {
+        "issues": "https://github.com/IndianOpinion/comment-draft-replies/issues",
+        "email": "hello@indianopinion.org"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/IndianOpinion/llm-json-php",
+            "no-api": true
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "indianopinion/llm-json-php": "^0.1"
+    },
+    "require-dev": {
+        "php-stubs/wordpress-stubs": "^6.4",
+        "php-stubs/wp-cli-stubs": "^2.10",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^10.5",
+        "squizlabs/php_codesniffer": "^3.10"
+    },
+    "autoload": {
+        "psr-4": {
+            "IndianOpinion\\CommentDraftReplies\\": "src/"
+        },
+        "files": [
+            "src/functions.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "IndianOpinion\\CommentDraftReplies\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --no-progress --memory-limit=1G",
+        "cs": "phpcs",
+        "check": [
+            "@cs",
+            "@stan",
+            "@test"
+        ]
+    }
+}
