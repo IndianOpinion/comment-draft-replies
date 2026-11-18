@@ -250,3 +250,5 @@ guide saying so.
 ## Licence
 
 MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Indian Opinion.
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
