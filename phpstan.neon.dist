@@ -1,0 +1,12 @@
+parameters:
+    level: 8
+    paths:
+        - src
+        - comment-draft-replies.php
+        - uninstall.php
+        - autoload.php
+    bootstrapFiles:
+        - vendor/php-stubs/wordpress-stubs/wordpress-stubs.php
+        - vendor/php-stubs/wp-cli-stubs/wp-cli-stubs.php
+        - tests/phpstan-constants.php
+    treatPhpDocTypesAsCertain: false

@@ -1,0 +1,9 @@
+/vendor/
+/lib/
+/.phpunit.cache/
+/.phpunit.result.cache
+/composer.phar
+/phpcs.xml
+/phpstan.neon
+/phpunit.xml
+.DS_Store

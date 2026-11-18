@@ -1,0 +1,22 @@
+.cdreplies-panel {
+	margin-top: 8px;
+	padding: 8px 12px;
+	border-left: 4px solid #2271b1;
+	background: #f6f7f7;
+}
+.cdreplies-panel[data-status="failed"],
+.cdreplies-panel[data-status="stale"] {
+	border-left-color: #d63638;
+}
+.cdreplies-panel[data-status="declined"] {
+	border-left-color: #dba617;
+}
+.cdreplies-flags,
+.cdreplies-meta,
+.cdreplies-code {
+	color: #50575e;
+	font-size: 12px;
+}
+.cdreplies-text {
+	margin: 6px 0;
+}
