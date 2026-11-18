@@ -6,19 +6,23 @@ namespace IndianOpinion\CommentDraftReplies\Integration;
 
 use IndianOpinion\CommentDraftReplies\Draft;
 use IndianOpinion\CommentDraftReplies\Generation\CallException;
+use IndianOpinion\CommentDraftReplies\Logger;
 
 /**
- * Soft integration with the gen-queue plugin (case 22, section 5.8). Every
- * name gen-queue owns is a constant of this class, so a change in its
- * public interface is a one-file change here.
+ * Soft integration with the gen-queue plugin (case 22, section 5.8), as its
+ * README publishes it: detected by `GEN_QUEUE_VERSION`, jobs through the
+ * soft enqueue filter `gen_queue_enqueue_job`, the type registered with
+ * `gen_queue_register_type()` on `gen_queue_register_types`, and the
+ * handler called as `handler(Job $job, JobContext $ctx)`. Every name
+ * gen-queue owns is a constant of this class.
  */
 final class GenQueue
 {
     public const JOB_TYPE = 'comment-draft-replies.generate';
     public const VERSION_CONSTANT = 'GEN_QUEUE_VERSION';
-    public const ENQUEUE_FUNCTION = 'gen_queue_enqueue';
-    public const ENQUEUE_FILTER = 'gen_queue_enqueue';
+    public const ENQUEUE_FILTER = 'gen_queue_enqueue_job';
     public const REGISTER_ACTION = 'gen_queue_register_types';
+    public const REGISTER_FUNCTION = 'gen_queue_register_type';
     public const RETRYABLE_CLASS = 'IndianOpinion\\GenQueue\\RetryableException';
     public const PERMANENT_CLASS = 'IndianOpinion\\GenQueue\\PermanentException';
     public const ACCOUNT_CLASS = 'IndianOpinion\\GenQueue\\AccountException';
@@ -33,28 +37,49 @@ final class GenQueue
         return 'draft:' . $draft->id() . ':' . $draft->generation();
     }
 
-    /** Enqueue a generation job. False when the queue did not take it. */
+    /**
+     * Enqueue a generation job through the soft enqueue filter, which
+     * returns a job id, null when gen-queue is absent, or a WP_Error (the
+     * queue catches its own exceptions there). False when the queue did not
+     * take the job, so the caller falls back to WP-Cron.
+     */
     public static function enqueue(Draft $draft): bool
     {
         $payload = ['draft_id' => $draft->id(), 'generation' => $draft->generation()];
-        $args = ['idempotency_key' => self::key($draft), 'caller' => 'comment-draft-replies'];
-        $enqueue = self::callable(self::ENQUEUE_FUNCTION);
-        if ($enqueue !== null) {
-            $result = $enqueue(self::JOB_TYPE, $payload, $args);
-        } else {
+        $args = ['idempotency_key' => self::key($draft), 'source' => 'comment-draft-replies'];
+        try {
             $result = apply_filters(self::ENQUEUE_FILTER, null, self::JOB_TYPE, $payload, $args);
+        } catch (\Throwable $e) {
+            $result = null;
+        }
+        if ($result instanceof \WP_Error) {
+            Logger::throttled('genqueue_enqueue', HOUR_IN_SECONDS, 'warning', 'genqueue_enqueue', ['draft' => $draft->id(), 'codes' => [(string) $result->get_error_code()]]);
+
+            return false;
         }
 
-        return $result !== null && $result !== false && !$result instanceof \WP_Error;
+        return is_int($result) || (is_numeric($result) && (int) $result > 0);
     }
 
-    /** Register the job handler on the queue's register-types action. */
+    /**
+     * Register the job type on the queue's register-types action. The
+     * handler receives the job payload array and the job context.
+     *
+     * @param callable(array<mixed>, mixed): void $handler
+     */
     public static function register(callable $handler): void
     {
-        add_action(self::REGISTER_ACTION, static function ($registry) use ($handler): void {
-            if (is_object($registry) && method_exists($registry, 'register')) {
-                $registry->register(self::JOB_TYPE, $handler);
+        add_action(self::REGISTER_ACTION, static function () use ($handler): void {
+            $register = self::callable(self::REGISTER_FUNCTION);
+            if ($register === null) {
+                return;
             }
+            $register(self::JOB_TYPE, static function ($job, $ctx = null) use ($handler) {
+                $payload = is_object($job) && isset($job->payload) && is_array($job->payload) ? $job->payload : (is_array($job) ? $job : []);
+                $handler($payload, $ctx);
+
+                return null;
+            });
         });
     }
 
@@ -66,6 +91,7 @@ final class GenQueue
             CallException::ACCOUNT => self::ACCOUNT_CLASS,
             default => self::PERMANENT_CLASS,
         };
+
         return self::instantiate($class, $e) ?? $e;
     }
 
@@ -74,7 +100,12 @@ final class GenQueue
         if (!class_exists($class) || !is_subclass_of($class, \Throwable::class)) {
             return null;
         }
-        return new $class($e->getMessage(), 0, $e);
+        // RetryableException takes (message, retryAfter, code, previous);
+        // the others take the standard (message, code, previous).
+        $args = $class === self::RETRYABLE_CLASS ? [$e->getMessage(), null, 0, $e] : [$e->getMessage(), 0, $e];
+        $made = (new \ReflectionClass($class))->newInstanceArgs($args);
+
+        return $made instanceof \Throwable ? $made : null;
     }
 
     /** A function by name, when it exists. */
@@ -83,11 +114,20 @@ final class GenQueue
         return is_callable($name) ? $name : null;
     }
 
-    /** Report cost to the job context with metered true (case 26). */
+    /**
+     * Report usage to the job context (case 26). The amount is zero because
+     * this plugin holds no prices; `metered` is true when spend-meter
+     * already recorded the call, so it is not counted twice.
+     */
     public static function reportCost(mixed $context, ?int $in, ?int $out, bool $metered): void
     {
-        if (is_object($context) && method_exists($context, 'reportCost')) {
-            $context->reportCost(['tokens_in' => $in, 'tokens_out' => $out, 'metered' => $metered]);
+        if (!is_object($context) || !method_exists($context, 'addCost')) {
+            return;
+        }
+        try {
+            $context->addCost(0, ['input_units' => max(0, (int) $in), 'output_units' => max(0, (int) $out), 'metered' => $metered]);
+        } catch (\Throwable $e) {
+            Logger::throttled('genqueue_cost', HOUR_IN_SECONDS, 'warning', 'genqueue_cost', ['codes' => [get_class($e)]]);
         }
     }
 }

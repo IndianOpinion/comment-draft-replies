@@ -129,7 +129,7 @@ final class GenerationTest extends TestCase
     #[PreserveGlobalState(false)]
     public function testT26SpendMeter(): void
     {
-        define('SPEND_METER_CONTRACT', 1);
+        define('SPEND_METER_API', 1);
         $allow = false;
         $asked = [];
         add_filter('spend_meter_pre_spend', static function ($v, $args) use (&$allow, &$asked) {
@@ -148,7 +148,9 @@ final class GenerationTest extends TestCase
         self::assertSame('meter_cap', $this->draftFor($id)->lastReason());
         self::assertSame('comment-draft-replies.reply', $asked[0]['purpose']);
         self::assertSame('comment-draft-replies', $asked[0]['caller']);
-        self::assertSame(600, $asked[0]['output_tokens']);
+        self::assertSame(600, $asked[0]['max_output_tokens']);
+        self::assertGreaterThan(0, $asked[0]['est_input_tokens']);
+        self::assertSame('openrouter.ai', $asked[0]['provider']);
 
         $allow = true;
         $this->model->push(FakeModel::reply('<<bad>> ' . str_repeat('x', 1200)));
@@ -157,14 +159,41 @@ final class GenerationTest extends TestCase
         self::assertSame('ready', $this->draftFor($id)->status());
         self::assertCount(2, $records);
         self::assertNotSame($records[0]['call_id'], $records[1]['call_id']);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', $records[0]['call_id']);
+        self::assertSame([1, 2], [$records[0]['attempt'], $records[1]['attempt']]);
+        self::assertSame('r2', $records[0]['reservation_id']);
         self::assertSame('ok', $records[1]['status']);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testT26NullDecisionMeansNoMeterAndCapStopReleasesTheReservation(): void
+    {
+        define('SPEND_METER_API', 1);
+        add_filter('spend_meter_pre_spend', static fn ($v) => $v, 10, 2);
+        $id = $this->postComment();
+        $id2 = $this->postComment(['comment_author_email' => 'two@example.net']);
+        $this->settings(['daily_cap' => 1]);
+        $report = $this->plugin->runner->run();
+        self::assertSame('ready', $this->draftFor($id)->status());
+        self::assertSame('cap', $report['stopped']);
+
+        remove_all_filters('spend_meter_pre_spend');
+        add_filter('spend_meter_pre_spend', static fn () => ['allowed' => true, 'reason' => 'ok', 'reservation_id' => 'res-9'], 10, 2);
+        $released = [];
+        add_action('spend_meter_release', static function ($r) use (&$released) {
+            $released[] = $r;
+        });
+        self::assertSame('cap', $this->plugin->runner->process($this->draftFor($id2)->id()));
+        self::assertSame('queued', $this->draftFor($id2)->status());
+        self::assertSame(['res-9'], $released);
     }
 
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
     public function testT26UnknownContractIsIgnored(): void
     {
-        define('SPEND_METER_CONTRACT', 2);
+        define('SPEND_METER_API', 2);
         add_filter('spend_meter_pre_spend', static fn () => ['allowed' => false, 'reason' => 'cap']);
         $id = $this->postComment();
         $this->plugin->runner->run();
@@ -173,14 +202,30 @@ final class GenerationTest extends TestCase
 
     public function testT27PromptLibraryAndFallback(): void
     {
-        add_filter('prompt_library_render', static fn ($v, $slug, $vars) => $slug === 'comment-draft-replies-reply' ? ['system' => 'LIB SYSTEM', 'user' => 'LIB USER ' . $vars['comment'], 'version' => 4] : null, 10, 3);
+        $seen = [];
+        add_filter('promptlib_render', static function ($v, $slug, $vars, $version, $options) use (&$seen) {
+            $seen = [$version, $options, $vars];
+
+            return $slug === 'comment-draft-replies-reply' ? ['system' => 'LIB SYSTEM', 'user' => 'LIB USER ' . $vars['comment'], 'version' => 4, 'render_hash' => str_repeat('a', 64)] : null;
+        }, 10, 5);
         $id = $this->postComment();
         $this->plugin->runner->run();
         self::assertSame('library:comment-draft-replies-reply@4', $this->draftFor($id)->promptId());
         self::assertSame('LIB SYSTEM', $this->model->requests[0]['system']);
+        self::assertSame('live', $seen[0]);
+        self::assertSame('comment-draft-replies', $seen[1]['consumer']);
+        self::assertIsString($seen[2]['context']);
+        self::assertIsString($seen[2]['ancestors']);
 
-        remove_all_filters('prompt_library_render');
-        add_filter('prompt_library_render', static function () {
+        // A missing template comes back as a WP_Error: built-in prompt.
+        remove_all_filters('promptlib_render');
+        add_filter('promptlib_render', static fn () => new \WP_Error('promptlib_not_found', 'No template.'));
+        $id3 = $this->postComment(['comment_author_email' => 'three@example.net']);
+        $this->plugin->runner->run();
+        self::assertSame('builtin:1', $this->draftFor($id3)->promptId());
+
+        remove_all_filters('promptlib_render');
+        add_filter('promptlib_render', static function () {
             throw new \RuntimeException('library broke');
         });
         $logs = [];

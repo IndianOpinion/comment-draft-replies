@@ -244,7 +244,7 @@ final class Runner
             'deadline' => 60,
         ];
         $caller = $this->caller($s);
-        $providerHost = (string) parse_url((string) $s['base_url'], PHP_URL_HOST);
+        $providerHost = SpendMeter::providerSlug((string) $s['base_url']);
         $model = (string) $s['model'];
         $tlds = array_values(array_map('strval', (array) apply_filters('cdreplies_link_tlds', Text::DEFAULT_TLDS)));
         $hosts = array_values(array_map('strval', (array) apply_filters('cdreplies_allowed_reply_hosts', [(string) parse_url(home_url('/'), PHP_URL_HOST)])));
@@ -266,14 +266,23 @@ final class Runner
 
                 return 'cap';
             }
-            $callId = bin2hex(random_bytes(8));
+            $callId = wp_generate_uuid4();
             Logger::log('info', 'call', ['draft' => $id, 'comment' => $draft->commentId(), 'attempt' => $try, 'generation' => $draft->generation()]);
 
             try {
-                $answer = $caller->call($request);
+                try {
+                    $answer = $caller->call($request);
+                } catch (CallException $e) {
+                    throw $e;
+                } catch (\Throwable $e) {
+                    // A broken caller must not leave the draft claimed and
+                    // looking untried, or recovery would pay for it again.
+                    Logger::log('error', 'caller_error', ['draft' => $id, 'codes' => [get_class($e)]]);
+                    throw new CallException(CallException::PERMANENT, 'The model caller failed.', true, 'provider');
+                }
             } catch (CallException $e) {
                 if (SpendMeter::active()) {
-                    SpendMeter::record($reservation, $callId, $providerHost, $model, null, null, $e->billed() ? 'error_billed' : 'error_unbilled');
+                    SpendMeter::record($reservation, $callId, $try, $providerHost, $model, null, null, $e->billed() ? 'error_billed' : 'error_unbilled');
                 }
                 if ($e->kind() === CallException::OUTPUT) {
                     $lastReject = $e->reasonCode();
@@ -283,7 +292,7 @@ final class Runner
                 return $this->callFailed($draft, $token, $e, $queueMode);
             }
             if (SpendMeter::active()) {
-                SpendMeter::record($reservation, $callId, $providerHost, $answer->model, $answer->tokensIn, $answer->tokensOut, 'ok');
+                SpendMeter::record($reservation, $callId, $try, $providerHost, $answer->model, $answer->tokensIn, $answer->tokensOut, 'ok');
             }
             if ($queueMode) {
                 GenQueue::reportCost($context, $answer->tokensIn, $answer->tokensOut, SpendMeter::active());

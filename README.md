@@ -216,9 +216,13 @@ Optional integrations, each detected at run time and never required:
   `spend-meter` if you need a cost ceiling.
 - The script check knows the common scripts by Unicode property; it is a
   hint, not a language detector.
-- The integration names for `gen-queue`, `spend-meter` and `prompt-library`
-  live in one adapter class each under `src/Integration/`; check them
-  against those projects' published interfaces before you rely on them.
+- The integrations follow the published 0.1.0 interfaces of `gen-queue`
+  (`GEN_QUEUE_VERSION`, `gen_queue_enqueue_job`,
+  `gen_queue_register_type()` on `gen_queue_register_types`),
+  `spend-meter` (contract `SPEND_METER_API` 1, `spend_meter_pre_spend`,
+  `spend_meter_record`, `spend_meter_release`) and `prompt-library`
+  (`promptlib_render`, `promptlib_register_default()`). Each lives in one
+  adapter class under `src/Integration/`.
 - Drafts are kept for 90 days after they end. Published replies are
   ordinary comments and follow core's rules.
 
