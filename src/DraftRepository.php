@@ -168,6 +168,38 @@ final class DraftRepository
         ];
     }
 
+    /** Name of the per-site intake lock (MySQL named locks are server-wide). */
+    public function intakeLockName(): string
+    {
+        global $wpdb;
+
+        return 'cdreplies_intake_' . substr(md5((string) ($wpdb->dbname ?? '') . '|' . $this->table()), 0, 32);
+    }
+
+    /**
+     * Take the intake lock, so the rate-limit count and the insert of two
+     * concurrent comments cannot interleave. False when it was not granted
+     * within the timeout (the caller then goes on without it: the reader is
+     * never blocked, and the daily cap still bounds spending).
+     */
+    public function lockIntake(int $timeout = 2): bool
+    {
+        global $wpdb;
+        $suppress = $wpdb->suppress_errors(true);
+        $got = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', $this->intakeLockName(), $timeout));
+        $wpdb->suppress_errors($suppress);
+
+        return (string) $got === '1';
+    }
+
+    public function unlockIntake(): void
+    {
+        global $wpdb;
+        $suppress = $wpdb->suppress_errors(true);
+        $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $this->intakeLockName()));
+        $wpdb->suppress_errors($suppress);
+    }
+
     /**
      * Ids of queued drafts whose retry time has come, oldest first.
      *

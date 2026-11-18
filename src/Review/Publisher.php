@@ -121,10 +121,20 @@ final class Publisher
             return new \WP_Error('cdreplies_parent_gone', 'The comment or its post is gone, spam or in the trash.', ['status' => 409]);
         }
 
-        // The text: as written, or edited by the moderator.
+        // The text: as written, or edited by the moderator. The model's
+        // text is plain text: it is encoded, never interpreted as HTML, so a
+        // reply that spells out a tag (or an entity that decodes to one)
+        // cannot become markup, even for a user with unfiltered_html.
         $edited = false;
-        $body = (string) $draft->reply();
-        if ($text !== null && $text !== $body) {
+        $plain = (string) $draft->reply();
+        if (trim($plain) === '') {
+            return new \WP_Error('cdreplies_invalid_text', 'This draft has no text to publish.', ['status' => 400]);
+        }
+        $body = htmlspecialchars($plain, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        if ($text !== null) {
+            $text = str_replace(["\r\n", "\r"], "\n", $text);
+        }
+        if ($text !== null && $text !== $plain) {
             $filtered = trim(wp_kses($text, wp_kses_allowed_html('pre_comment_content')));
             if ($filtered === '' || Text::length($filtered) > self::EDIT_MAX) {
                 return new \WP_Error('cdreplies_invalid_text', 'The reply must be between 1 and 5000 characters.', ['status' => 400]);
@@ -206,10 +216,11 @@ final class Publisher
         }
         add_comment_meta($newId, self::PROVENANCE_META, (string) $draftId, true);
 
-        $set = ['reply_comment_id' => $newId, 'reply' => $body, 'editor_note' => null];
+        $set = ['reply_comment_id' => $newId, 'editor_note' => null];
         if ($edited) {
+            $set['reply'] = $body;
             $set['edited'] = 1;
-            $set['original_reply'] = (string) $draft->reply();
+            $set['original_reply'] = $plain;
         }
         $this->drafts->update($draftId, $set);
         $final = $this->drafts->find($draftId) ?? $draft;

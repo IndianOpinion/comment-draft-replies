@@ -249,28 +249,40 @@ final class Text
     }
 
     /**
+     * Letters per known script, with Hiragana and Katakana counted as one
+     * "Japanese" script.
+     *
+     * @return array<string, int>
+     */
+    public static function scriptCounts(string $text): array
+    {
+        $out = [];
+        foreach (self::SCRIPTS as $script) {
+            $n = preg_match_all('/\p{' . $script . '}/u', $text);
+            if ($n === false || $n === 0) {
+                continue;
+            }
+            $key = ($script === 'Hiragana' || $script === 'Katakana') ? 'Japanese' : $script;
+            $out[$key] = ($out[$key] ?? 0) + $n;
+        }
+
+        return $out;
+    }
+
+    /**
      * The script holding most letters, or null when there are fewer than
      * $minLetters letters in known scripts (ruling 3).
      */
     public static function dominantScript(string $text, int $minLetters = 5): ?string
     {
-        $best = null;
-        $bestCount = 0;
-        $total = 0;
-        foreach (self::SCRIPTS as $script) {
-            $n = preg_match_all('/\p{' . $script . '}/u', $text);
-            $n = $n === false ? 0 : $n;
-            $total += $n;
-            if ($n > $bestCount) {
-                $best = $script;
-                $bestCount = $n;
-            }
-        }
-        if ($total < $minLetters) {
+        $counts = self::scriptCounts($text);
+        if (array_sum($counts) < $minLetters) {
             return null;
         }
-        // Kana and Han are one writing system for this check.
-        if ($best === 'Hiragana' || $best === 'Katakana') {
+        arsort($counts);
+        $best = (string) array_key_first($counts);
+        // Kana with any Han is Japanese, even when Han letters outnumber it.
+        if ($best === 'Han' && isset($counts['Japanese'])) {
             return 'Japanese';
         }
 
@@ -278,18 +290,26 @@ final class Text
     }
 
     /**
-     * True when both texts have a known dominant script and they differ.
-     * Han with kana counts as Japanese; Han alone matches Japanese too.
+     * True when the reply's script is clearly not one the comment is written
+     * in. Mixed-script comments are common (a Hindi comment with English
+     * words, Hinglish, a quoted name), so the reply only needs its own
+     * dominant script to make up a real share of the comment's letters
+     * (default 20 per cent). Han and Japanese count as one writing system.
+     * Short texts never flag.
      */
-    public static function scriptMismatch(string $comment, string $reply): bool
+    public static function scriptMismatch(string $comment, string $reply, float $minShare = 0.2): bool
     {
-        $a = self::dominantScript($comment);
         $b = self::dominantScript($reply);
-        if ($a === null || $b === null || $a === $b) {
+        $counts = self::scriptCounts($comment);
+        $total = array_sum($counts);
+        if ($b === null || $total < 5) {
             return false;
         }
         $cjk = ['Han', 'Japanese'];
+        $share = in_array($b, $cjk, true)
+            ? ($counts['Han'] ?? 0) + ($counts['Japanese'] ?? 0)
+            : ($counts[$b] ?? 0);
 
-        return !(in_array($a, $cjk, true) && in_array($b, $cjk, true));
+        return $share / $total < $minShare;
     }
 }

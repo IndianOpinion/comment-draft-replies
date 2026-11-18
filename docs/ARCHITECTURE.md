@@ -157,13 +157,52 @@ PRD's open questions.
   re-verify once an hour.
 - **Log file.** Written only if its directory is writable; paths with `..`
   or a PHP extension are refused at save time.
-- **Integration names.** gen-queue, spend-meter and prompt-library were
-  integrated through names chosen to match the PRD's wording (job type,
-  idempotency key, purpose and caller strings exactly as specified; the
-  hook and constant names as class constants in `src/Integration/`). The
-  builder worked only from this repository's PRD and did not read those
-  projects, so their hook names must be checked against their published
-  interfaces; any change is one constant.
+- **Integration names.** Checked at review against the published 0.1.0
+  READMEs and PRDs of the three projects. gen-queue: detected by
+  `GEN_QUEUE_VERSION`; jobs go through the soft enqueue filter
+  `gen_queue_enqueue_job` (job id, null when absent, `WP_Error` on
+  failure); the type is registered with `gen_queue_register_type()` on
+  `gen_queue_register_types`, and the handler takes the job and its
+  context; failures map to its `RetryableException` (message, retry
+  after, code, previous), `PermanentException` and `AccountException`;
+  usage goes to `JobContext::addCost(0, [...])` with `metered` true when
+  spend-meter recorded the call (this plugin holds no prices).
+  spend-meter: contract constant `SPEND_METER_API` equal to 1; the intent
+  carries `purpose`, `caller`, `provider` (the endpoint host as a slug),
+  `model`, `est_input_tokens` and `max_output_tokens`; a null decision
+  means no meter; anything but `allowed === true` is a deny; each attempt
+  is recorded with a UUID `call_id`, the attempt number and the
+  reservation id, and token counts only when the response had them.
+  prompt-library: `promptlib_render` with the slug, the values, `live`
+  and the consumer id; a `WP_Error` (for example `promptlib_not_found`)
+  falls back to the built-in prompt; the default definition is shipped in
+  the `prompt-library/1` format with `context` (the built-in body, reader
+  text already fenced) as its only required variable.
+- **Intake lock.** Intake counts the rate windows and inserts the row
+  under one MySQL named lock per site (`GET_LOCK`, two-second wait), so two
+  comments in the same thread, post or by the same author that arrive
+  together cannot both pass a limit. If the lock is not granted in time,
+  intake goes on without it and logs once an hour: the reader is never
+  blocked, and the daily cap still bounds spending. The two lock
+  statements are not counted as data reads in the section 9 budget.
+- **Publishing model text.** The model's reply is stored as plain text and
+  encoded (`<`, `>` and `&`) when it is published, so it can never become
+  markup, even for a moderator with `unfiltered_html`. Edited text goes
+  through `wp_kses` with the comment tags, as case 41 says.
+- **Publish authentication.** On top of refusing application passwords and
+  requiring a same-user logged-in cookie, the publish route requires that
+  core authenticated the REST request by cookie (`$wp_rest_auth_cookie`),
+  so a user set by any other method is refused even when a cookie is also
+  present.
+- **Untrusted prompt text.** Reader text (comment, ancestors, commenter
+  name) has hidden and direction-control characters removed (zero-width
+  joiner and non-joiner kept for Indic scripts) and every double bracket
+  broken, so no reader can forge a data-block marker. The commenter's name
+  sits inside the comment's data block on one line.
+- **Script check on mixed text.** A reply is flagged `script_mismatch` only
+  when its dominant script makes up less than 20 per cent of the comment's
+  letters, so a Hindi comment with English words accepts a reply in either
+  script, and Han with kana counts as Japanese.
 - **llm-json-php use.** One `Request` per attempt with the schema, a token
   cap of 600 (filter `cdreplies_max_output_tokens`) and a 60 second
   deadline; the library's WordPress transport and transient store, with the

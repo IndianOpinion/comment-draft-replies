@@ -35,6 +35,7 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
     {
         parent::setUp();
         \WPStub::reset();
+        unset($GLOBALS['wp_rest_auth_cookie']);
         \WP_CLI::$out = [];
         Clock::freeze(self::NOW);
         Runner::$libraryOverride = null;
@@ -189,6 +190,7 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
     {
         wp_set_current_user($userId);
         \WPStub::$cookieUser = $userId;
+        $GLOBALS['wp_rest_auth_cookie'] = true;
     }
 
     /**

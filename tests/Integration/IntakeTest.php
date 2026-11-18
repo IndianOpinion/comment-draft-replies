@@ -33,7 +33,9 @@ final class IntakeTest extends TestCase
         do_action('comment_post', $id, '0', []);
         self::assertSame([], \WPStub::$http);
         self::assertSame([], \WPStub::$mail);
-        $reads = array_filter($wpdb->log, static fn (string $q): bool => preg_match('/^\s*(SELECT|SHOW)/i', $q) === 1);
+        $locks = array_filter($wpdb->log, static fn (string $q): bool => preg_match('/^\s*SELECT (GET|RELEASE)_LOCK/i', $q) === 1);
+        self::assertCount(2, $locks);
+        $reads = array_filter(array_diff($wpdb->log, $locks), static fn (string $q): bool => preg_match('/^\s*(SELECT|SHOW)/i', $q) === 1);
         $writes = array_filter($wpdb->log, static fn (string $q): bool => preg_match('/^\s*(INSERT|UPDATE|DELETE|REPLACE)/i', $q) === 1);
         self::assertLessThanOrEqual(4, count($reads), implode("\n", $reads));
         self::assertLessThanOrEqual(2, count($writes), implode("\n", $writes));
@@ -238,6 +240,41 @@ final class IntakeTest extends TestCase
         $this->post(25);
         $off = $this->postComment(['comment_post_ID' => 25, 'comment_author_email' => 'same@example.net', 'comment_content' => 'Fifth by the same author?']);
         self::assertNotNull($this->draftFor($off));
+    }
+
+    public function testT16CountAndInsertRunUnderTheIntakeLock(): void
+    {
+        $name = $this->plugin->drafts->intakeLockName();
+        $other = self::secondConnection();
+        $seen = [];
+        add_action('cdreplies_queued', static function () use ($other, $name, &$seen): void {
+            $r = $other->query("SELECT IS_FREE_LOCK('" . $other->real_escape_string($name) . "')");
+            $seen[] = $r instanceof \mysqli_result ? (string) $r->fetch_row()[0] : 'error';
+        });
+        $this->postComment();
+        self::assertSame(['0'], $seen, 'the lock is held while the draft row is written');
+        $r = $other->query("SELECT IS_FREE_LOCK('" . $other->real_escape_string($name) . "')");
+        self::assertSame('1', $r instanceof \mysqli_result ? (string) $r->fetch_row()[0] : 'error');
+
+        // Another process holding the lock: intake waits, then goes on
+        // without it (the reader is never blocked) and logs once.
+        $other->query("SELECT GET_LOCK('" . $other->real_escape_string($name) . "', 0)");
+        $this->settings(['limit_thread' => [0, 86400], 'limit_author' => [0, 86400]]);
+        $id = $this->plugin->drafts->lockIntake(0) ? 0 : $this->postComment(['comment_author_email' => 'late@example.net']);
+        self::assertGreaterThan(0, $id);
+        self::assertNotNull($this->draftFor($id));
+        $other->close();
+    }
+
+    private static function secondConnection(): \mysqli
+    {
+        $env = static fn (string $k, string $d): string => (string) (getenv($k) !== false ? getenv($k) : $d);
+        $socket = getenv('CDR_DB_SOCKET') !== false ? (string) getenv('CDR_DB_SOCKET') : null;
+        $db = mysqli_init();
+        self::assertInstanceOf(\mysqli::class, $db);
+        $db->real_connect($socket !== null ? 'localhost' : $env('CDR_DB_HOST', '127.0.0.1'), $env('CDR_DB_USER', 'root'), $env('CDR_DB_PASS', ''), $env('CDR_DB_NAME', 'cdreplies_test'), (int) $env('CDR_DB_PORT', '3306'), $socket);
+
+        return $db;
     }
 
     public function testT17DailyCapAtIntake(): void

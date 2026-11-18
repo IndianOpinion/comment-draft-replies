@@ -157,6 +157,27 @@ final class Intake
      */
     public function queue(int $commentId, string $lane = 'manual', bool $dryRun = false): Draft|Decision
     {
+        if ($dryRun) {
+            return $this->queueUnlocked($commentId, $lane, true);
+        }
+        // Count and insert under one lock: without it, two comments in the
+        // same thread (or by the same author) arriving together both see the
+        // count below the limit and both get a draft.
+        $locked = $this->drafts->lockIntake();
+        if (!$locked) {
+            Logger::throttled('intake_lock', HOUR_IN_SECONDS, 'warning', 'intake_lock', ['comment' => $commentId, 'codes' => ['lock_timeout']]);
+        }
+        try {
+            return $this->queueUnlocked($commentId, $lane, false);
+        } finally {
+            if ($locked) {
+                $this->drafts->unlockIntake();
+            }
+        }
+    }
+
+    private function queueUnlocked(int $commentId, string $lane, bool $dryRun): Draft|Decision
+    {
         $decision = $this->evaluate($commentId, $lane);
         if ($decision->exists()) {
             $existing = $this->drafts->findByComment($commentId);

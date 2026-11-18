@@ -37,7 +37,16 @@ final class SafetyTest extends TestCase
         self::assertSame(401, self::errorStatus($this->rest('POST', '/comment-draft-replies/v1/drafts/' . $d->id() . '/publish', [], $this->nonceHeader())));
         \WPStub::$cookieUser = self::ADMIN;
         self::assertSame(401, self::errorStatus($this->rest('POST', '/comment-draft-replies/v1/drafts/' . $d->id() . '/publish', [], $this->nonceHeader())));
+        // A same-user cookie is present, but core did not authenticate this
+        // request by cookie (another method set the user first): 401.
+        \WPStub::$cookieUser = self::EDITOR;
+        unset($GLOBALS['wp_rest_auth_cookie']);
+        self::assertSame(401, self::errorStatus($this->rest('POST', '/comment-draft-replies/v1/drafts/' . $d->id() . '/publish', [], $this->nonceHeader())));
         self::assertSame(1, $this->countComments());
+        // The browser session itself publishes.
+        $GLOBALS['wp_rest_auth_cookie'] = true;
+        self::assertInstanceOf(\WP_REST_Response::class, $this->rest('POST', '/comment-draft-replies/v1/drafts/' . $d->id() . '/publish', [], $this->nonceHeader()));
+        self::assertSame(2, $this->countComments());
     }
 
     public function testT49NoCronCliOrPublicFunctionPublishes(): void

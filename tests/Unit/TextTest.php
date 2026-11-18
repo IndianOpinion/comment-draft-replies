@@ -93,6 +93,20 @@ final class TextTest extends TestCase
         self::assertFalse(Text::scriptMismatch('東京の運賃はいつ上がりますか', '三月に上がります'));
     }
 
+    public function testScriptMismatchOnMixedScriptComments(): void
+    {
+        // Hindi with English words: a reply in either script is fine.
+        $mixed = 'Metro fare कब बढ़ेगा, and will the monthly pass बदलेगा?';
+        self::assertFalse(Text::scriptMismatch($mixed, 'किराया मार्च में बढ़ेगा।'));
+        self::assertFalse(Text::scriptMismatch($mixed, 'The fare rises in March.'));
+        // A Tamil comment quoting one English name: an English reply is flagged.
+        self::assertTrue(Text::scriptMismatch('Chennai மெட்ரோ கட்டணம் எப்போது உயரும் என்று சொல்லுங்கள்', 'The fare rises in March.'));
+        // Hinglish written in Latin letters: a Devanagari reply is flagged.
+        self::assertTrue(Text::scriptMismatch('Kiraya kab badhega bhai?', 'किराया मार्च में बढ़ेगा।'));
+        // Han-heavy Japanese with a little kana is still Japanese.
+        self::assertSame('Japanese', Text::dominantScript('東京都運賃値上時期の'));
+    }
+
     /** @return array<string, array{0:string,1:?string}> */
     public static function replies(): array
     {

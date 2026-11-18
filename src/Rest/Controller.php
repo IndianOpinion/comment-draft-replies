@@ -131,6 +131,12 @@ final class Controller
         if ($uid <= 0) {
             return $err;
         }
+        // Core sets this global to true only when the REST request was
+        // authenticated by the logged-in cookie (and then checks the REST
+        // nonce). Any other method leaves it unset or false.
+        if (($GLOBALS['wp_rest_auth_cookie'] ?? null) !== true) {
+            return $err;
+        }
         $cookieUser = wp_validate_auth_cookie('', 'logged_in');
         if ($cookieUser === false || (int) $cookieUser !== $uid) {
             return $err;

@@ -68,7 +68,7 @@ final class Prompt
             'post_context' => Text::cut($context, $chars),
             'ancestors' => $ancestors,
             'comment' => self::clean(Text::cut(Text::plain((string) $comment->comment_content), 4000)),
-            'commenter' => !empty($settings['send_names']) ? Text::cut(Text::plain((string) $comment->comment_author), 100) : 'a reader',
+            'commenter' => !empty($settings['send_names']) ? self::oneLine(Text::cut(Text::plain((string) $comment->comment_author), 100)) : 'a reader',
             'editor_note' => (string) ($draft->editorNote() ?? ''),
             'want_reply' => $draft->hasFlag('anyway'),
         ];
@@ -78,10 +78,25 @@ final class Prompt
         return array_intersect_key($filtered, array_flip(self::ALLOWED_KEYS)) + array_fill_keys(self::ALLOWED_KEYS, '');
     }
 
-    /** Remove the data-block markers from untrusted text. */
+    /**
+     * Make untrusted text safe to place inside a data block: drop the
+     * invisible and direction-control characters that can hide text (the
+     * zero-width joiner and non-joiner stay, because Indic and other scripts
+     * need them), and break every double bracket, so no reader can open or
+     * close a data block, whatever spacing or hidden characters they use.
+     */
     public static function clean(string $text): string
     {
-        return str_replace([self::MARKER_OPEN, self::MARKER_CLOSE], '', $text);
+        $text = (string) preg_replace('/[\x{200B}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text);
+        $text = (string) preg_replace('/\[(?=[\x{200C}\x{200D}]*\[)/u', '[ ', $text);
+
+        return (string) preg_replace('/\](?=[\x{200C}\x{200D}]*\])/u', '] ', $text);
+    }
+
+    /** One line of untrusted text: cleaned, whitespace runs collapsed. */
+    public static function oneLine(string $text): string
+    {
+        return trim((string) preg_replace('/\s+/u', ' ', self::clean($text)));
     }
 
     /**
@@ -135,7 +150,8 @@ final class Prompt
                 $out[] = '(' . $role . ")\n" . self::MARKER_OPEN . "\n" . self::clean($text) . "\n" . self::MARKER_CLOSE;
             }
         }
-        $out[] = 'The comment to reply to, written by ' . self::str($v['commenter']) . ":\n" . self::MARKER_OPEN . "\n" . self::clean(self::str($v['comment'])) . "\n" . self::MARKER_CLOSE;
+        // The commenter's name is reader data too, so it sits inside the block.
+        $out[] = "The comment to reply to:\n" . self::MARKER_OPEN . "\nWritten by: " . self::oneLine(self::str($v['commenter'])) . "\n\n" . self::clean(self::str($v['comment'])) . "\n" . self::MARKER_CLOSE;
         if (!empty($v['want_reply'])) {
             $out[] = 'The editor wants a reply to this comment; answer with action "reply".';
         }

@@ -76,6 +76,32 @@ final class ReviewTest extends TestCase
         self::assertSame('ready', $d->status());
     }
 
+    public function testT39ModelTextIsPublishedAsTextNeverAsMarkup(): void
+    {
+        // The model spelled a tag with entities; the validator decodes them
+        // to plain text, so publishing must encode, even for an admin.
+        $d = $this->readyDraft(['comment_approved' => '1'], 'Use &lt;script&gt;alert(1)&lt;/script&gt; never, and 2 &lt; 3.');
+        self::assertSame('Use <script>alert(1)</script> never, and 2 < 3.', $d->reply());
+        $this->loginBrowser(self::ADMIN);
+        $ok = $this->publish($d->id());
+        self::assertInstanceOf(\WP_REST_Response::class, $ok);
+        $reply = get_comment($ok->get_data()['reply_comment_id']);
+        self::assertStringNotContainsString('<script', $reply->comment_content);
+        self::assertSame('Use &lt;script&gt;alert(1)&lt;/script&gt; never, and 2 &lt; 3.', $reply->comment_content);
+        // The draft keeps the plain text it was written as.
+        self::assertSame('Use <script>alert(1)</script> never, and 2 < 3.', $this->draftFor($d->commentId())->reply());
+    }
+
+    public function testT39ErasedDraftCannotPublishAnEmptyReply(): void
+    {
+        $d = $this->readyDraft(['comment_approved' => '1']);
+        $this->plugin->drafts->update($d->id(), ['reply' => null, 'last_reason' => 'erased']);
+        $this->loginBrowser(self::EDITOR);
+        self::assertSame('cdreplies_invalid_text', $this->publish($d->id())->get_error_code());
+        self::assertSame(1, $this->countComments());
+        self::assertSame('ready', $this->draftFor($d->commentId())->status());
+    }
+
     public function testT39ApproveAsEditorAndRefusals(): void
     {
         $d = $this->readyDraft(['comment_approved' => '1']);
